@@ -167,6 +167,21 @@ type EdgeProxyConfig struct {
 	// Allowed values are: "FilterIfLabelExists", "FilterIfLabelDoesNotExists"
 	// default "FilterIfLabelExists"
 	ServiceFilterMode defaults.ServiceFilterMode `json:"serviceFilterMode,omitempty"`
+
+	// MeshCIDR indicates the CIDR of cluster, seperate as ClouCIDR and EdgeCIDR
+	// must set
+	// Allowed values are like:
+	// - cloudcidr:  10.244.36.0/24
+	// - edgecidr:   10.244.13.0/24,10.244.15.0/24
+	MeshCIDR *MeshCIDR `json:"meshCIDR,omitempty"`
+}
+
+// MeshCIDR indicates the CIDR of cluster
+type MeshCIDR struct {
+	// CloudCIDR indicates the CIDR of cloud Pods, Allows multiNetwork
+	CloudCIDR []string `json:"cloudCIDR,omitempty"`
+	// CloudCIDR indicates the CIDR of edge Pods, Allows multiNetwork
+	EdgeCIDR []string `json:"edgeCIDR,omitempty"`
 }
 
 // Socks5Proxy indicates the socks5 proxy config
