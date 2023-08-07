@@ -10,6 +10,8 @@ import (
 	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
 	"github.com/kubeedge/edgemesh/pkg/clients"
 	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
+
+	p "github.com/kubeedge/edgemesh/pkg/test/cni/proxy"
 )
 
 // EdgeProxy is used for traffic proxy
@@ -17,6 +19,7 @@ type EdgeProxy struct {
 	Config      *v1alpha1.EdgeProxyConfig
 	ProxyServer *ProxyServer
 	Socks5Proxy *Socks5Proxy
+	MeshAdapter *p.MeshAdapter
 }
 
 // Name of edgeproxy
@@ -83,9 +86,16 @@ func newEdgeProxy(c *v1alpha1.EdgeProxyConfig, cli *clients.Clients) (*EdgeProxy
 		}
 	}
 
+	// new mesh adapter
+	meshAdapter, err := p.MeshAdapter.New()
+	if err != nil {
+		return nil, fmt.Errorf("new mesh adapter err: %v", err)
+	}
+
 	return &EdgeProxy{
 		Config:      c,
 		ProxyServer: proxyServer,
 		Socks5Proxy: socks5Proxy,
+		MeshAdapter: meshAdapter,
 	}, nil
 }
