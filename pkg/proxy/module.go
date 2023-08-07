@@ -11,7 +11,7 @@ import (
 	"github.com/kubeedge/edgemesh/pkg/clients"
 	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
 
-	p "github.com/kubeedge/edgemesh/pkg/test/cni/proxy"
+	p "github.com/kubeedge/edgemesh/tests/cni/proxy"
 )
 
 // EdgeProxy is used for traffic proxy
@@ -87,7 +87,7 @@ func newEdgeProxy(c *v1alpha1.EdgeProxyConfig, cli *clients.Clients) (*EdgeProxy
 	}
 
 	// new mesh adapter
-	meshAdapter, err := p.MeshAdapter.New()
+	meshAdapter, err := p.New()
 	if err != nil {
 		return nil, fmt.Errorf("new mesh adapter err: %v", err)
 	}

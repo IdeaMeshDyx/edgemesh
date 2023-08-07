@@ -87,6 +87,9 @@ github.com/coredns/coredns/plugin/trace
 github.com/coredns/coredns/plugin/transfer
 github.com/coredns/coredns/plugin/whoami
 github.com/coredns/coredns/request
+# github.com/coreos/go-iptables v0.5.0
+## explicit
+github.com/coreos/go-iptables/iptables
 # github.com/coreos/go-systemd/v22 v22.3.2
 github.com/coreos/go-systemd/v22/dbus
 # github.com/cyphar/filepath-securejoin v0.2.2

@@ -10,8 +10,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
-	"github.com/kubeedge/edgemesh/pkg/proxy"
-	"github.com/kubeedge/edgemesh/pkg/test/cni/util"
+	"github.com/kubeedge/edgemesh/tests/cni/util"
 )
 
 /**
@@ -91,7 +90,7 @@ type MeshAdapter struct {
 	syncPeriod     time.Duration
 	minSyncPeriod  time.Duration
 	udpIdleTimeout time.Duration
-	iptables       util.Iptutil     // iptables util ， 用于调用 iptables 相关行为
+	iptables       *util.Iptutil     // iptables util ， 用于调用 iptables 相关行为
 	tunnelMapMutex sync.Mutex       // protects Tunnel Map
 	tunnel         map[string][]int // 创建的Tunnel list，每个网段对应数个 Tunnel 进程的 port
 	listenIP       net.IP
@@ -100,7 +99,7 @@ type MeshAdapter struct {
 	edge           []string            // 边缘的区域网段
 	proxyPorts     util.PortAllocator  // 分配 Port TODO : 修改逻辑，使 Port 分配符合 Tunnel 的逻辑
 	stopChan       chan struct{}       // 用于控制 Tunnel 数量以及多少
-	Socks5Proxy    *proxy.Socks5Proxy  // 创建 Tunnel 对象
+	//Socks5Proxy    *proxy.Socks5Proxy  // 创建 Tunnel 对象
 	kubeClient     clientset.Interface // 接入 k8s 的客户端，用于同步和获取信息
 }
 
@@ -108,7 +107,7 @@ type MeshAdapter struct {
 func New() (*MeshAdapter, error) {
 	var client clientset.Interface
 	// 初始化iptables
-	iptables, err := util.Iptutil.New()
+	iptables, err := util.New()
 	if err != nil {
 		fmt.Println("Error initializing iptables: ", err)
 		return nil, err
@@ -134,7 +133,7 @@ func (mesh *MeshAdapter) getCIDR(cfg *v1alpha1.EdgeProxyConfig) error {
 
 	mesh.cloud = cfg.MeshCIDR.CloudCIDR
 	mesh.edge = cfg.MeshCIDR.EdgeCIDR
-
+	fmt.Printf("this is cloud %V",mesh.cloud)
 	return nil
 }
 func (mesh *MeshAdapter) getTunnel() error          { return nil }

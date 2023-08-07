@@ -1,4 +1,4 @@
-package iptables
+package util
 
 import (
 	"github.com/coreos/go-iptables/iptables"
@@ -46,7 +46,7 @@ type Iptutil struct {
 }
 
 // New init operator to control ipatbles
-func New() (IptOp, error) {
+func New() (*Iptutil, error) {
 	// init ipatbles operator for ipv4 rules
 	// TODO: add IPV6 support
 	ipt, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Timeout(5))
