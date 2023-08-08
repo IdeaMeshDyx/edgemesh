@@ -87,7 +87,7 @@ func newEdgeProxy(c *v1alpha1.EdgeProxyConfig, cli *clients.Clients) (*EdgeProxy
 	}
 
 	// new mesh adapter
-	meshAdapter, err := p.New()
+	meshAdapter, err := p.New(c,listenIP, cli.GetKubeClient())
 	if err != nil {
 		return nil, fmt.Errorf("new mesh adapter err: %v", err)
 	}
