@@ -3,100 +3,45 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
+	"github.com/kubeedge/edgemesh/pkg/tunnel"
+	meshnet "github.com/kubeedge/edgemesh/pkg/util/net"
+
+	"github.com/kubeedge/edgemesh/tests/cni/util"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
-
-	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
-	"github.com/kubeedge/edgemesh/pkg/tunnel"
-	"github.com/kubeedge/edgemesh/tests/cni/util"
 )
-
-/**
-func main() {
-	// 初始化iptables
-	ipt, err := Ipt.New()
-	if err != nil {
-		fmt.Println("Error initializing iptables: ", err)
-		return
-	}
-
-	// 在 nat table 创建EdgeMesh链
-	err = ipt.NewChain("nat", "EDGEMESH")
-	if err != nil {
-		fmt.Println("Error creating EdgeMesh chains: ", err)
-		return
-	}
-
-	// 读取配置文件
-	// TODO： 接入到 EdgeMesh 中，需要商量这个配置文件的位置
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath("./config")
-	err = viper.ReadInConfig()
-	if err != nil {
-		fmt.Println("Error reading config file: ", err)
-		return
-	}
-
-	//edgeIP := viper.GetStringSlice("edge.ip")
-	//cloudIP := viper.GetStringSlice("cloud.ip")
-
-	// 插入一条规则将所有到10.244.12.0/24网段的所有协议的流量拦截到EDGEMESH链匹配规则
-	ruleEdge := iptables.Rule{"nat", "PREROUTING", []string{"-p", "all", "-d", "10.244.12.0/24", "-j", "EDGEMESH"}}
-	err = ipt.InsertUnique(ruleEdge, 1)
-	if err != nil {
-		fmt.Println("Error inserting rule to PREROUTING chain:", err)
-		return
-	}
-
-	// 插入规则，在 PREROUTING 时候将目标地址是edge网段的数据包都拦截转发到应用层的进程
-	ruleSpec := iptables.Rule{"nat", "EDGEMESH", []string{"-p", "all", "-d", "10.244.12.0/24", "-j", "DNAT", "--to-destination", "169.254.96.16:42707"}}
-	err = ipt.Append(ruleSpec)
-	if err != nil {
-		fmt.Println("Error inserting rule: ", err)
-		return
-	}
-	fmt.Println("EdgeMesh chain created and rule inserted successfully.")
-}
-**/
 
 const (
 	LabelKubeedge string = "kubeedge=edgemesh-agent"
 	AgentPodName  string = "edgemesh-agent"
 	TCP           string = "tcp"
 	UDP           string = "udp"
-	CNIPort       string = "40008"
+	CNIPort       int    = 40008
 )
 
-var tunnelMap map[string]string // 创建的Tunnel list，每个网段对应数个 Tunnel 进程的 port
+var tunnelMap []TunnelInfo // 创建的Tunnel list，每个网段对应数个 Tunnel 进程的 port
 
 type Adapter interface {
 	// preRun 在 proxy 模块/Tunnel 模块启动前运行，建立数个 Tunnel 隧道专门用于穿透,创建 EDGEMESH 链
 	preRun(cfg *v1alpha1.EdgeProxyConfig)
 
-	// Run
+	// Run 主函数
 	Run(cfg *v1alpha1.EdgeProxyConfig, stop <-chan struct{})
 
 	// adapterRoute 维护隧道服务,当 P2P 请求增多的时候扩增 Tunnel 数量并选择合适的端口转发
 	adapterRoute() error
-
-	// 获取 EdgeTunnel 的端口并写入全局变量 tunnelMap
-	// @TODO 创建独立的 EDGETUNNEL
-	getTunnel() error
-
-	// 依据 Tunnel 信息插入转发规则
-	applyRules() error
 
 	// 一直运行
 	watchRoute(stop <-chan struct{}) error
@@ -112,22 +57,28 @@ type MeshAdapter struct {
 	iptables       *util.Iptutil       // iptables util ， 用于调用 iptables 相关行为
 	tunnelMapMutex sync.Mutex          // protects Tunnel Map
 	listenIP       net.IP              // edgemesh 运行的地址【不需要】
-	hostIP         net.IP              // 节点的地址【不需要】
+	hostName       string              // 节点名称
 	hostCIDR       string              // 本节点的 CIDR地址 【不需要】
 	cloud          []string            // 云上的区域网段
 	edge           []string            // 边缘的区域网段
-	proxyPorts     util.PortAllocator  // 分配 Port TODO : 修改逻辑，使 Port 分配符合 Tunnel 的逻辑 【不需要】
 	StartChan      chan struct{}       // 用于控制 Tunnel 数量以及多少
 	kubeClient     clientset.Interface // 接入 k8s 的客户端，用于同步和获取信息
+	namespace      string              // Pod 所处的 Namespace
 }
 
-type AdapterProxyOpt struct {
-	//IP:PORT,用于本地监听的地址和端口
-	LocalAddr string
+type TunnelInfo struct {
+	//  需要链接的容器 IP
+	PodIP string
 	// 需要连接的节点名称:
 	NodeName string
-	//远程的端口：
-	RemotePort int32
+	// 需要连接的节点IP:
+	NodeIP string
+
+	// 占用的 Port
+	Port int
+
+	// iptables 中是否有 对应规则，1表示有，0表示没有
+	status int
 }
 
 // 初始化
@@ -153,14 +104,17 @@ func New(cfg *v1alpha1.EdgeProxyConfig, ip net.IP, kubeClient clientset.Interfac
 		cloud:      cloud,
 		edge:       edge,
 		kubeClient: kubeClient,
+		namespace:  cfg.Socks5Proxy.Namespace,
 	}
 
 	return mesh, nil
 }
 
-// 从配置文件中获取不同网段的地址
 func (mesh *MeshAdapter) Run(stop <-chan struct{}) error {
-	go mesh.PreRun(stop)
+	err := mesh.PreRun(stop)
+	if err != nil {
+		klog.Errorf("PreRun failed: %v", err)
+	}
 	for {
 		select {
 		case _, ok := <-stop:
@@ -186,14 +140,13 @@ func (mesh *MeshAdapter) PreRun(stop <-chan struct{}) error {
 		return err
 	}
 
-	// 遍历不同的 CIDR，为每个跨网段的 CIDR 添加转发规则且启动Tunnel
-	// 目前跨网段的标准是： 与本地节点IP不在一个网段
+	// 获取本节点的 cidr 范围
 	mesh.hostCIDR, err = mesh.findLocalCIDR()
 	if err != nil {
 		klog.Errorf("Error getting loacl CIDR from kubeclient: ", err)
 		return err
 	}
-	// 启动 WatchRoute ，用于负载均衡的算法，1. 初次有四色 map 发生
+	// 启动 WatchRoute， 当其他网段 Pod 建立时候，触发adapterRoute
 	go mesh.watchRoute(stop)
 
 	return nil
@@ -203,9 +156,11 @@ func (mesh *MeshAdapter) PreRun(stop <-chan struct{}) error {
 func (mesh *MeshAdapter) findLocalCIDR() (string, error) {
 	// 获取目前节点的名称
 	nodeName := os.Getenv("NODE_NAME")
+
 	if nodeName == "" {
 		panic("NODE_NAME environment variable not set")
 	}
+
 	// 使用 clientset 获取节点信息
 	node, err := mesh.kubeClient.CoreV1().Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
 	if err != nil {
@@ -231,7 +186,7 @@ func getCIDR(cfg *v1alpha1.MeshCIDR) ([]string, []string, error) {
 		return cloud, edge, err
 	}
 
-	klog.Infof("dyx: Parsed CIDR of Cloud: %v \n   Edge: %v \n", cloud, edge)
+	klog.Infof("Parsed CIDR of Cloud: %v \n   Edge: %v \n", cloud, edge)
 	return cloud, edge, nil
 }
 
@@ -246,51 +201,107 @@ func validateCIDRs(cidrs []string) error {
 }
 
 func (mesh *MeshAdapter) adapterRoute() error {
-	// 创建新的 UDP Listner
-	srv, err := net.Listen(`tcp`, opt.LocalAddr)
+	// 获取随机的 Port 端口
+	port, err := util.GetPort(50000, 100)
 	if err != nil {
-		log.Panicln(err)
+		klog.Errorf("Error allocating port:", err)
 	}
+
+	// 创建新的 TCP Listner,监听在本节点的随机地址
+	addr := &net.TCPAddr{
+		IP:   mesh.listenIP,
+		Port: port,
+	}
+	srv, err := net.ListenTCP(TCP, addr)
+	if err != nil {
+		klog.Errorf("get TCP listener failed:", err)
+	}
+	klog.Infof("open a tcp proxy,listen addr:[%s]", addr)
+
+	// 插入规则拦截流量
+	target := tunnelMap[len(tunnelMap)-1]
+	// 插入一条规则将所有到目标 PodIP 的所有流量拦截到EDGEMESH链匹配规则
+	ruleEdge := util.Rule{Table: "nat", Chain: "PREROUTING", Spec: []string{"-p", "tcp", "-d", target.PodIP, "-j", "EDGEMESH"}}
+	err = mesh.iptables.InsertUnique(ruleEdge, 1)
+	if err != nil {
+		klog.Errorf("Error inserting rule to PREROUTING chain:", err)
+	}
+
+	// 插入规则，在 EDGEMESH 链将目标地址是edge网段的数据包都拦截转发到应用层的进程
+	ruleSpec := util.Rule{Table: "nat", Chain: "EDGEMESH", Spec: []string{"-p", "tcp", "-d", target.PodIP, "-j", "DNAT", "--to-destination", addr.String()}}
+	err = mesh.iptables.Append(ruleSpec)
+	if err != nil {
+		klog.Errorf("Error inserting rule: ", err)
+	}
+	klog.Infof("EdgeMesh chain created and rule inserted successfully.")
+
 	for {
 		conn, err := srv.Accept()
 		if err != nil {
-			log.Println(err)
+			klog.Infof("TCP listener failed:", err)
 			continue
 		}
 
-		zaplog.SugarLogger.Infof("open a rdp proxy,listen addr:[%s],remote node:[%s]", opt.LocalAddr, opt.NodeName)
-
-		go r.handleConn(opt, conn)
+		go mesh.handleConn(conn)
+		klog.Infof("open a meshAdapter proxy,listen addr:[%s],remote node:[%s]", addr, target.NodeName)
 	}
 }
 
-func (mesh *MeshAdapter) getTunnel(cidr string) error {
+func (mesh *MeshAdapter) handleConn(conn net.Conn) {
+	defer conn.Close()
+	// 获取对端Pod容器的 IP 地址
+	// 因为是启动在 EdgeMesh 当中的 TCP 占用40008端口
+	targetIP, err := mesh.getTargetIpByNodeName(AgentPodName)
+	if err != nil {
+		klog.Errorf("Unable to get destination IP, %v", err)
+		return
+	}
+	klog.Info("Successfully get destination IP. NodeIP: ", targetIP, ", Port: ", CNIPort)
 
-	// 依据输入的 CIDR 获取随机的端口
+	// 创建新的 proxyOpt 对象
+	proxyOpts := tunnel.ProxyOptions{
+		Protocol: TCP,
+		NodeName: AgentPodName, // 对段节点的 NodeName
+		IP:       targetIP,     // 对端 pod 的IP（由于是 host）
+		Port:     int32(CNIPort),
+	}
+	stream, err := tunnel.Agent.GetProxyStream(proxyOpts)
+	if err != nil {
+		klog.Errorf("l4 proxy get proxy stream from %s error: %w", proxyOpts.NodeName, err)
+		return
+	}
 
-	// 使用该端口结合 listenIP 启动Tunnel
+	klog.Infof("l4 proxy start proxy data between tcpserver %v", proxyOpts.NodeName)
 
-	// 为这个 Tunnel 插入 iptables 规则
-	mesh.applyRules()
+	meshnet.ProxyConn(stream, conn)
 
-	return nil
-}
+	klog.Infof("Success proxy to %v", conn)
 
-func (mesh *MeshAdapter) applyRules() error {
-	return nil
 }
 
 func (mesh *MeshAdapter) watchRoute(stop <-chan struct{}) {
-	// 1. 第一类触发 Adapter 运行，当本节点创建了新的Pod
+	// 监控其他节点创建 Pod 事件，当所创建的 Pod 与节点的 cidr 不相同时候出发 adapterRoute
 	// 创建一个Pod资源的事件处理器
 	podEventHandler := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			pod := obj.(*apiv1.Pod)
 			if pod.Status.Phase == apiv1.PodRunning {
-				// 全局 Tunnel list 当中记录新创建的  Pod 以及IP
-				tunnelMap[pod.Name] = pod.Status.PodIP
-				<-mesh.StartChan
-				klog.Infof("New pod created: %s, IP: %s\n", pod.Name, pod.Status.PodIP)
+				//  判断是否是跨域 Pod 生成
+				crossNet, err := mesh.judgeNet(pod.Status.PodIP)
+				if err != nil {
+					klog.Errorf("judge Pod IP failed:", err)
+				}
+				if crossNet {
+					// 全局 Tunnel list 当中记录新创建的  Pod 以及对应IP
+					// TODO: 去重覆盖，负载均衡等优化
+					tunnelMap = append(tunnelMap, TunnelInfo{
+						NodeName: pod.Name,
+						PodIP:    pod.Status.PodIP,
+						status:   0,
+					})
+					<-mesh.StartChan
+					klog.Infof("New pod created: %s, IP: %s\n", pod.Name, pod.Status.PodIP)
+				}
 			}
 		},
 	}
@@ -298,16 +309,89 @@ func (mesh *MeshAdapter) watchRoute(stop <-chan struct{}) {
 	factory := informers.NewSharedInformerFactory(mesh.kubeClient, 30*time.Second)
 	podInformer := factory.Core().V1().Pods().Informer()
 	podInformer.AddEventHandler(podEventHandler)
-
 	// 启动事件监听器
 	go podInformer.Run(stop)
+
+	// 创建新的 TCP Listner,监听在本节点的40008 端口
+	addr := &net.TCPAddr{
+		IP:   mesh.listenIP,
+		Port: CNIPort,
+	}
+	srv, err := net.ListenTCP(TCP, addr)
+	if err != nil {
+		klog.Errorf("get TCP listener failed:", err)
+	}
+	klog.Infof("open a tcp proxy,listen addr:[%s]", addr)
+
+	for {
+		conn, err := srv.Accept()
+		if err != nil {
+			klog.Infof("TCP listener failed:", err)
+			continue
+		}
+
+		go mesh.handleRecieve(conn)
+	}
+}
+
+func (mesh *MeshAdapter) handleRecieve(conn net.Conn) {
+	defer conn.Close()
+
+	// 接收 TCP 流量之后，使用 TUN 将数据包传输到容器网桥
+	// 使用 OpenTun 函数创建 TUN 设备
+	tun, ifname, err := util.OpenTun("tun0")
+	if err != nil {
+		klog.Errorf("create TUN device  failed: %v", err)
+	}
+	klog.Infof("TUN interface created: %s\n", ifname)
+	defer tun.Close()
+
+	// 配置 TUN 设备
+	// 这个实验阶段，后期一步步修改
+	tunIP := "10.244.0.1"
+	tunNetmask := "255.255.0.0"
+	cmd := exec.Command("ifconfig", ifname, tunIP, "netmask", tunNetmask, "up")
+	if err := cmd.Run(); err != nil {
+		klog.Errorf("Error configuring TUN device: %v\n", err)
+	}
+
+	// 添加路由规则以将 TUN 设备接收到的 IP 数据包转发到本节点的 Pod IP 网段
+	podCIDR := "10.244.0.0/16"
+	cmd = exec.Command("route", "add", "-net", podCIDR, "dev", ifname)
+	if err := cmd.Run(); err != nil {
+		klog.Errorf("Error adding route: %v\n", err)
+	}
+
+	// 在一个循环中，从 TCP 服务器读取数据包，并将它们写入 TUN 设备
+	buf := make([]byte, 4096)
+	// 从 TCP 服务器读取数据包
+	n, err := conn.Read(buf)
+	if err != nil {
+		klog.Errorf("Error reading from connection: %v\n", err)
+	}
+
+	// 将接收到的数据包写入 TUN 设备
+	_, err = tun.Write(buf[:n])
+	if err != nil {
+		klog.Errorf("Error writing to TUN device: %v\n", err)
+	}
+
+}
+
+func (mesh *MeshAdapter) judgeNet(podIP string) (bool, error) {
+	// 解析 IP 地址
+	ip := net.ParseIP(podIP)
+	// 解析 CIDR
+	_, cidr, _ := net.ParseCIDR(mesh.hostCIDR)
+	// 检查 IP 是否在 CIDR 范围内
+	return cidr.Contains(ip), nil
 }
 
 // getTargetIpByNodeName Returns the real IP address of the node
 // We must obtain the real IP address of the node to communicate, so we need to query the IP address of the edgemesh-agent on the node
 // Because users may modify the IP addresses of edgemesh-0 and edgecore. If used directly, it may cause errors
 func (mesh *MeshAdapter) getTargetIpByNodeName(nodeName string) (targetIP string, err error) {
-	pods, err := mesh.kubeClient.CoreV1().Pods(mesh.config.Namespace).List(context.Background(), metav1.ListOptions{FieldSelector: "spec.nodeName=" + nodeName, LabelSelector: LabelKubeedge})
+	pods, err := mesh.kubeClient.CoreV1().Pods(mesh.namespace).List(context.Background(), metav1.ListOptions{FieldSelector: "spec.nodeName=" + nodeName, LabelSelector: LabelKubeedge})
 	if err != nil {
 		return "", err
 	}
@@ -320,88 +404,4 @@ func (mesh *MeshAdapter) getTargetIpByNodeName(nodeName string) (targetIP string
 	}
 
 	return ip, err
-}
-
-func (mesh *MeshAdapter) handleConn(rdpOpt TunnelProxyOpt, conn net.Conn) {
-	defer conn.Close()
-
-	//	解析目标 Pod 地址对应的节点地址
-
-	proxyOpts := tunnel.ProxyOptions{
-		Protocol: UDP,
-		NodeName: rdpOpt.NodeName,
-		IP:       "127.0.0.1",
-		Port:     rdpOpt.RemoteRdpPort,
-	}
-	stream, err := tunnel.Agent.GetProxyStream(proxyOpts)
-	if err != nil {
-		klog.Errorf("l4 proxy get proxy stream from %s error: %w", proxyOpts.NodeName, err)
-		return
-	}
-
-	klog.Infof("l4 proxy start proxy data between tcpserver %v", proxyOpts.NodeName)
-
-	util.ProxyConn(stream, conn)
-
-	klog.Infof("Success proxy to %v", conn)
-
-}
-
-func (mesh *MeshAdapter) handleSubnetEvents(batch []lease.Event) {
-	for _, evt := range batch {
-		switch evt.Type {
-		case lease.EventAdded:
-			if evt.Lease.Attrs.BackendType != n.BackendType {
-				log.Warningf("Ignoring non-%v subnet: type=%v", n.BackendType, evt.Lease.Attrs.BackendType)
-				continue
-			}
-
-			if evt.Lease.EnableIPv4 {
-				log.Infof("Subnet added: %v via %v", evt.Lease.Subnet, evt.Lease.Attrs.PublicIP)
-
-				route := n.GetRoute(&evt.Lease)
-				routeAdd(route, netlink.FAMILY_V4, n.addToRouteList, n.removeFromV4RouteList)
-			}
-
-			if evt.Lease.EnableIPv6 {
-				log.Infof("Subnet added: %v via %v", evt.Lease.IPv6Subnet, evt.Lease.Attrs.PublicIPv6)
-
-				route := n.GetV6Route(&evt.Lease)
-				routeAdd(route, netlink.FAMILY_V6, n.addToV6RouteList, n.removeFromV6RouteList)
-			}
-
-		case lease.EventRemoved:
-			if evt.Lease.Attrs.BackendType != n.BackendType {
-				log.Warningf("Ignoring non-%v subnet: type=%v", n.BackendType, evt.Lease.Attrs.BackendType)
-				continue
-			}
-
-			if evt.Lease.EnableIPv4 {
-				log.Info("Subnet removed: ", evt.Lease.Subnet)
-
-				route := n.GetRoute(&evt.Lease)
-				// Always remove the route from the route list.
-				n.removeFromV4RouteList(*route)
-
-				if err := netlink.RouteDel(route); err != nil {
-					log.Errorf("Error deleting route to %v: %v", evt.Lease.Subnet, err)
-				}
-			}
-
-			if evt.Lease.EnableIPv6 {
-				log.Info("Subnet removed: ", evt.Lease.IPv6Subnet)
-
-				route := n.GetV6Route(&evt.Lease)
-				// Always remove the route from the route list.
-				n.removeFromV6RouteList(*route)
-
-				if err := netlink.RouteDel(route); err != nil {
-					log.Errorf("Error deleting route to %v: %v", evt.Lease.IPv6Subnet, err)
-				}
-			}
-
-		default:
-			log.Error("Internal error: unknown event type: ", int(evt.Type))
-		}
-	}
 }
