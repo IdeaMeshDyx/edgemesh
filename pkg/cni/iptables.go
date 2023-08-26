@@ -1,4 +1,4 @@
-package util
+package cni
 
 import (
 	"github.com/coreos/go-iptables/iptables"

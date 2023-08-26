@@ -167,6 +167,19 @@ type EdgeProxyConfig struct {
 	// Allowed values are: "FilterIfLabelExists", "FilterIfLabelDoesNotExists"
 	// default "FilterIfLabelExists"
 	ServiceFilterMode defaults.ServiceFilterMode `json:"serviceFilterMode,omitempty"`
+}
+
+type EdgeCniConfig struct {
+	// Enable indicates whether enable EdgeCni
+	// default false
+	Enable bool `json:"enable,omitempty"`
+
+	// MasqIP indicates the encapsulation IP of EdgeCni Tun Dev
+	// do not allow users to configure manually
+	EncapIP string `json:"encapip,omitempty"`
+
+	// TunMode indicates wether adapter usese ebpf and fast mod
+	TunMode int `json:"tunmode,omitempty"`
 
 	// MeshCIDR indicates the CIDR of cluster, seperate as ClouCIDR and EdgeCIDR
 	// must set

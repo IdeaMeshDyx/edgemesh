@@ -20,9 +20,12 @@ const (
 	EdgeProxyModuleName   = "EdgeProxy"
 	EdgeGatewayModuleName = "EdgeGateway"
 	EdgeTunnelModuleName  = "EdgeTunnel"
+	EdgeCniModuleName     = "EdgeCni"
 
 	BridgeDeviceName = "edgemesh0"
 	BridgeDeviceIP   = "169.254.96.16"
+
+	TunDeviceName = "edge_tun0"
 
 	TempKubeConfigPath = "kubeconfig"
 	TempCorefilePath   = "Corefile"

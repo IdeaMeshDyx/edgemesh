@@ -8,17 +8,13 @@ import (
 )
 
 func (proxy *EdgeProxy) Run() {
-	// start Meshadapter, create Tunnel and forward P2P
-	// Read Cfg and create Tunnel Set
-	proxy.MeshAdapter.Run(wait.NeverStop)
-
 	// start sock5 proxy
 	if proxy.Config.Socks5Proxy.Enable {
 		go proxy.Socks5Proxy.Start(wait.NeverStop)
 	}
 
 	// run proxy server
-	err = proxy.ProxyServer.Run()
+	err := proxy.ProxyServer.Run()
 	if err != nil {
 		klog.Errorf("run proxy server err: %v", err)
 		return

@@ -1,9 +1,9 @@
-package proxy
+package cni
 
 import (
 	"context"
 	"fmt"
-	util2 "github.com/kubeedge/edgemesh/pkg/proxy/util"
+	"github.com/kubeedge/edgemesh/pkg/proxy"
 	"net"
 	"os"
 	"os/exec"
@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	UDP              string = "udp"
-	CNIPort          int    = 40008
+	UDP     string = "udp"
+	CNIPort int    = 40008
 )
 
 var tunnelMap []TunnelInfo // 创建的Tunnel list，每个网段对应数个 Tunnel 进程的 port
@@ -51,7 +51,7 @@ type MeshAdapter struct {
 	syncPeriod     time.Duration
 	minSyncPeriod  time.Duration
 	udpIdleTimeout time.Duration
-	iptables       *util2.Iptutil      // iptables util ， 用于调用 iptables 相关行为
+	iptables       *Iptutil            // iptables util ， 用于调用 iptables 相关行为
 	tunnelMapMutex sync.Mutex          // protects Tunnel Map
 	listenIP       net.IP              // edgemesh 运行的地址【不需要】
 	hostName       string              // 节点名称
@@ -70,7 +70,6 @@ type TunnelInfo struct {
 	NodeName string
 	// 需要连接的节点IP:
 	NodeIP string
-
 	// 占用的 Port
 	Port int
 
@@ -81,7 +80,7 @@ type TunnelInfo struct {
 // 初始化
 func NewMeshAdapter(cfg *v1alpha1.EdgeProxyConfig, ip net.IP, kubeClient clientset.Interface) (*MeshAdapter, error) {
 	// 初始化iptables
-	iptables, err := util2.New()
+	iptables, err := New()
 	if err != nil {
 		fmt.Println("Error initializing iptables: ", err)
 		return nil, err
@@ -107,8 +106,8 @@ func NewMeshAdapter(cfg *v1alpha1.EdgeProxyConfig, ip net.IP, kubeClient clients
 	return mesh, nil
 }
 
-func (mesh *MeshAdapter) Run(stop <-chan struct{}) error{
-	mesh.PreRun(stop)	
+func (mesh *MeshAdapter) Run(stop <-chan struct{}) error {
+	mesh.PreRun(stop)
 	for {
 		select {
 		case _, ok := <-stop:
@@ -126,7 +125,7 @@ func (mesh *MeshAdapter) Run(stop <-chan struct{}) error{
 	}
 }
 
-func (mesh *MeshAdapter) PreRun(stop <-chan struct{}){
+func (mesh *MeshAdapter) PreRun(stop <-chan struct{}) {
 	// 在 nat table 创建EdgeMesh链
 	err := mesh.iptables.NewChain("nat", "EDGEMESH")
 	if err != nil {
@@ -201,7 +200,7 @@ func (mesh *MeshAdapter) adapterRoute() error {
 		IP:   mesh.listenIP,
 		Port: port,
 	}
-	srv, err := net.ListenTCP(TCP, addr)
+	srv, err := net.ListenTCP(proxy.TCP, addr)
 	if err != nil {
 		klog.Errorf("get TCP listener failed:", err)
 	}
@@ -210,14 +209,14 @@ func (mesh *MeshAdapter) adapterRoute() error {
 	// 插入规则拦截流量
 	target := tunnelMap[len(tunnelMap)-1]
 	// 插入一条规则将所有到目标 PodIP 的所有流量拦截到EDGEMESH链匹配规则
-	ruleEdge := util2.Rule{Table: "nat", Chain: "PREROUTING", Spec: []string{"-p", "tcp", "-d", target.PodIP, "-j", "EDGEMESH"}}
+	ruleEdge := Rule{Table: "nat", Chain: "PREROUTING", Spec: []string{"-p", "tcp", "-d", target.PodIP, "-j", "EDGEMESH"}}
 	err = mesh.iptables.InsertUnique(ruleEdge, 1)
 	if err != nil {
 		klog.Errorf("Error inserting rule to PREROUTING chain:", err)
 	}
 
 	// 插入规则，在 EDGEMESH 链将目标地址是edge网段的数据包都拦截转发到应用层的进程
-	ruleSpec := util2.Rule{Table: "nat", Chain: "EDGEMESH", Spec: []string{"-p", "tcp", "-d", target.PodIP, "-j", "DNAT", "--to-destination", addr.String()}}
+	ruleSpec := Rule{Table: "nat", Chain: "EDGEMESH", Spec: []string{"-p", "tcp", "-d", target.PodIP, "-j", "DNAT", "--to-destination", addr.String()}}
 	err = mesh.iptables.Append(ruleSpec)
 	if err != nil {
 		klog.Errorf("Error inserting rule: ", err)
@@ -240,7 +239,7 @@ func (mesh *MeshAdapter) handleConn(conn net.Conn) {
 	defer conn.Close()
 	// 获取对端Pod容器的 IP 地址
 	// 因为是启动在 EdgeMesh 当中的 TCP 占用40008端口
-	targetIP, err := mesh.getTargetIpByNodeName(AgentPodName)
+	targetIP, err := mesh.getTargetIpByNodeName(proxy.AgentPodName)
 	if err != nil {
 		klog.Errorf("Unable to get destination IP, %v", err)
 		return
@@ -249,9 +248,9 @@ func (mesh *MeshAdapter) handleConn(conn net.Conn) {
 
 	// 创建新的 proxyOpt 对象
 	proxyOpts := tunnel.ProxyOptions{
-		Protocol: TCP,
-		NodeName: AgentPodName, // 对段节点的 NodeName
-		IP:       targetIP,     // 对端 pod 的IP（由于是 host）
+		Protocol: proxy.TCP,
+		NodeName: proxy.AgentPodName, // 对段节点的 NodeName
+		IP:       targetIP,           // 对端 pod 的IP（由于是 host）
 		Port:     int32(CNIPort),
 	}
 	stream, err := tunnel.Agent.GetProxyStream(proxyOpts)
@@ -306,7 +305,7 @@ func (mesh *MeshAdapter) watchRoute(stop <-chan struct{}) {
 		IP:   mesh.listenIP,
 		Port: CNIPort,
 	}
-	srv, err := net.ListenTCP(TCP, addr)
+	srv, err := net.ListenTCP(proxy.TCP, addr)
 	if err != nil {
 		klog.Errorf("get TCP listener failed:", err)
 	}
@@ -327,7 +326,7 @@ func (mesh *MeshAdapter) handleRecieve(conn net.Conn) {
 
 	// 接收 TCP 流量之后，使用 TUN 将数据包传输到容器网桥
 	// 使用 OpenTun 函数创建 TUN 设备
-	tun, ifname, err := util2.OpenTun("tun0")
+	tun, ifname, err := OpenTun("tun0")
 	if err != nil {
 		klog.Errorf("create TUN device  failed: %v", err)
 	}
@@ -379,13 +378,13 @@ func (mesh *MeshAdapter) judgeNet(podIP string) (bool, error) {
 // We must obtain the real IP address of the node to communicate, so we need to query the IP address of the edgemesh-agent on the node
 // Because users may modify the IP addresses of edgemesh-0 and edgecore. If used directly, it may cause errors
 func (mesh *MeshAdapter) getTargetIpByNodeName(nodeName string) (targetIP string, err error) {
-	pods, err := mesh.kubeClient.CoreV1().Pods(mesh.namespace).List(context.Background(), metav1.ListOptions{FieldSelector: "spec.nodeName=" + nodeName, LabelSelector: LabelKubeedge})
+	pods, err := mesh.kubeClient.CoreV1().Pods(mesh.namespace).List(context.Background(), metav1.ListOptions{FieldSelector: "spec.nodeName=" + nodeName, LabelSelector: proxy.LabelKubeedge})
 	if err != nil {
 		return "", err
 	}
 	ip, err := "", fmt.Errorf("edgemesh agent not found on node [%s]", nodeName)
 	for _, pod := range pods.Items {
-		if strings.Contains(pod.Name, AgentPodName) {
+		if strings.Contains(pod.Name, proxy.AgentPodName) {
 			ip = pod.Status.PodIP
 			err = nil
 		}
