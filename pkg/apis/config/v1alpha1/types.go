@@ -28,6 +28,8 @@ type AgentModules struct {
 	EdgeProxyConfig *EdgeProxyConfig `json:"edgeProxy,omitempty"`
 	// EdgeTunnelConfig indicates EdgeTunnel module config
 	EdgeTunnelConfig *EdgeTunnelConfig `json:"edgeTunnel,omitempty"`
+	//EdgeCniConfig indicates EdgeCNI module config
+	EdgeCniConfig *EdgeCniConfig `json:"edgeTunnel,omitempty"`
 }
 
 // EdgeMeshGatewayConfig indicates the config of EdgeMeshGateway which get from EdgeMeshGateway config file

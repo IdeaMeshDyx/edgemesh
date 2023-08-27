@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	tunDevice  = "/dev/net/tun"
-	ifnameSize = 16
+	tunDevice   = "/dev/net/tun"
+	ifnameSize  = 16
+	ReceiveSize = 50
+	SendSize    = 50
 )
 
 type tunIf struct {
@@ -26,11 +28,11 @@ type tunIf struct {
 	// Tun interface to handle the tun device
 	tunDev *water.Interface
 
-	// Tcp pipeline for transport data to p2p
-	TcpRecievePipe chan []byte
+	// Receive pipeline for transport data to p2p
+	ReceivePipe chan []byte
 
 	// Tcp pipeline for transport data to p2p
-	TcpWritePipe chan []byte
+	WritePipe chan []byte
 
 	// filedescribtion
 	fd int
@@ -55,10 +57,12 @@ func NewTunIf(name string, Ip net.IP) (*tunIf, error) {
 
 	klog.Infof("Tun Interface Name: %s\n", name)
 	return &tunIf{
-		tunIp:   Ip,
-		tunDev:  tun,
-		tunName: name,
-		fd:      fd,
+		tunIp:       Ip,
+		tunDev:      tun,
+		tunName:     name,
+		fd:          fd,
+		ReceivePipe: make(chan []byte, ReceiveSize),
+		WritePipe:   make(chan []byte, SendSize),
 	}, nil
 }
 
@@ -106,23 +110,23 @@ func ExecCommand(command string) error {
 	return nil
 }
 
-// TunRecieveLoop  recieve data from inside Pods
-func (tun *tunIf) TunRecieveLoop() {
-	// buffer to recieve data
+// TunReceiveLoop  receive data from inside Pods
+func (tun *tunIf) TunReceiveLoop() {
+	// buffer to receive data
 	buffer := buf.NewRecycleByteBuffer(65536)
 	packet := make([]byte, 65536)
 	for {
-
+		// read from tun Dev
 		n, err := tun.tunDev.Read(packet)
 		if err != nil {
 			klog.Error("failed to read data from tun", err)
 			break
 		}
 
-		// read data from tun
+		// get data from tun
 		buffer.Write(packet[:n])
 		for {
-			// Add IP frame to byte data
+			// Get IP frame to byte data to encapsulate
 			frame, err := ParseIPFrame(buffer)
 
 			if err != nil {
@@ -135,14 +139,15 @@ func (tun *tunIf) TunRecieveLoop() {
 			}
 
 			// transfer data to libP2P
-			tun.TcpRecievePipe <- frame.ToBytes()
-
-			klog.Infof("receive from tun, send through tunnel %s\n", frame.String())
+			tun.ReceivePipe <- frame.ToBytes()
+			// print out the reception data
+			klog.Infof("receive from tun, send through tunnel , source %s target %s len %d", frame.GetSourceIP(), frame.GetTargetIP(), frame.GetPayloadLen())
 		}
 	}
 	return
 }
 
+// TunWriteLoop  send data back to the pod
 func (tun *tunIf) TunWriteLoop() {
 	// buffer to write data
 	buffer := buf.NewRecycleByteBuffer(65536)
@@ -150,7 +155,7 @@ func (tun *tunIf) TunWriteLoop() {
 	for {
 		// transfer data to libP2P
 		//tun.TcpRecievePipe <- frame.ToBytes()
-		packet = <-tun.TcpWritePipe
+		packet = <-tun.WritePipe
 		if n := len(packet); n == 0 {
 			klog.Error("failed to read from tcp tunnel")
 		}
@@ -172,7 +177,7 @@ func (tun *tunIf) TunWriteLoop() {
 				break
 			}
 
-			klog.Infof("receive from tunnel, send through raw socket%s", frame.String())
+			klog.Infof("receive from tunnel, send through raw socket, source %s target %s len %d", frame.GetSourceIP(), frame.GetTargetIP(), frame.GetPayloadLen())
 
 			// send ip frame through raw socket
 			addr := syscall.SockaddrInet4{

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"github.com/kubeedge/edgemesh/pkg/cni"
 	"os"
 	"strings"
 
@@ -132,6 +133,9 @@ func registerModules(c *v1alpha1.EdgeMeshAgentConfig, cli *clients.Clients) []er
 		errs = append(errs, err)
 	}
 	if err := tunnel.Register(c.Modules.EdgeTunnelConfig); err != nil {
+		errs = append(errs, err)
+	}
+	if err := cni.Register(c.Modules.EdgeCniConfig, cli); err != nil {
 		errs = append(errs, err)
 	}
 	return errs

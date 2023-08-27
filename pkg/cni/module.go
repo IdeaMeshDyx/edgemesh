@@ -6,24 +6,16 @@ import (
 	"github.com/kubeedge/edgemesh/pkg/apis/config/defaults"
 	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
 	"github.com/kubeedge/edgemesh/pkg/clients"
-	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
-	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
-	"k8s.io/utils/exec"
-	"net"
 	"time"
 )
 
 // EdgeCni is used for cni traffic control
 type EdgeCni struct {
-	EncapIp          net.IP
 	Config           *v1alpha1.EdgeCniConfig
 	kubeClient       clientset.Interface
-	IptInterface     utiliptables.Interface
-	execer           exec.Interface
 	ConfigSyncPeriod time.Duration
-	TunIf            *tunIf
 	MeshAdapter      *MeshAdapter
 }
 
@@ -49,12 +41,11 @@ func (cni *EdgeCni) Start() {
 
 // Shutdown edgeproxy
 func (cni *EdgeCni) Shutdown() {
-	// err := cni.ProxyServer.CleanupAndExit()
 	// TODO:  Add cni.CleanupAndExit()
-
-	//if err != nil {
-	//	klog.ErrorS(err, "Cleanup iptables failed")
-	//}
+	err := cni.CleanupAndExit()
+	if err != nil {
+		klog.ErrorS(err, "Cleanup iptables failed")
+	}
 }
 
 // Register edgeproxy to beehive modules
@@ -72,31 +63,16 @@ func newEdgeCni(c *v1alpha1.EdgeCniConfig, cli *clients.Clients) (*EdgeCni, erro
 		return &EdgeCni{Config: c}, nil
 	}
 
-	// get proxy listen ip
-	encapIP, err := netutil.GetInterfaceIP(c.EncapIP)
+	// create a meshAdapter
+	mesh, err := NewMeshAdapter(c, cli.GetKubeClient())
 	if err != nil {
-		klog.Errorf("get proxy listen ip err: ", err)
+		klog.Errorf("create Mesh adapter err: ", err)
 		return nil, err
 	}
-
-	// Create a iptables utils.
-	execer := exec.New()
-	iptIf := utiliptables.New(execer, utiliptables.ProtocolIPv4)
-
-	// create a tun handler
-	tun, err := NewTunIf(defaults.TunDeviceName, encapIP)
-	if err != nil {
-		klog.Errorf("create tun device err: ", err)
-		return nil, err
-	}
-
-	//
 
 	return &EdgeCni{
-		Config:       c,
-		EncapIp:      encapIP,
-		IptInterface: iptIf,
-		TunIf:        tun,
-		kubeClient:   cli.GetKubeClient(),
+		Config:      c,
+		MeshAdapter: mesh,
+		kubeClient:  cli.GetKubeClient(),
 	}, nil
 }

@@ -40,6 +40,10 @@ var defaultLoadBalancerConfig = &LoadBalancer{
 	},
 }
 
+func newDefaultEdgeCNIConfig(configPath string) *EdgeCniConfig {
+	return nil
+}
+
 func newDefaultEdgeTunnelConfig(configPath string) *EdgeTunnelConfig {
 	return &EdgeTunnelConfig{
 		Enable:          false,
@@ -99,6 +103,7 @@ func NewDefaultEdgeMeshAgentConfig(configPath string) *EdgeMeshAgentConfig {
 				LoadBalancer: defaultLoadBalancerConfig,
 			},
 			EdgeTunnelConfig: newDefaultEdgeTunnelConfig(configPath),
+			EdgeCniConfig:    newDefaultEdgeCNIConfig(configPath),
 		},
 	}
 

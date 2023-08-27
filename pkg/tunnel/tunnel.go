@@ -413,6 +413,23 @@ func tryDialEndpoint(protocol, ip string, port int) (conn net.Conn, err error) {
 	return nil, err
 }
 
+type CNIAdapterOptions struct {
+	Protocol string
+	NodeName string
+}
+
+// GetCNIAdapterStream establishes a new stream with a destination peer, either directly or through a relay node,
+// use net.conn to get income data
+func (t *EdgeTunnel) GetCNIAdapterStream(opts CNIAdapterOptions) (*StreamConn, error) {
+
+	return nil, nil
+}
+
+func (t *EdgeTunnel) CNIAdapterStreamHandler(opts CNIAdapterOptions) (*StreamConn, error) {
+
+	return nil, nil
+}
+
 // BootstrapConnect tries to connect to a list of bootstrap peers in a relay map.
 // The function runs a loop to attempt connecting to each peer, and will retry if some peers fail to connect.
 // The function returns an error if it fails to connect to all bootstrap peers after a certain period of time.

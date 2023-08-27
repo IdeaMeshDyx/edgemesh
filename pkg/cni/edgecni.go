@@ -1,5 +1,22 @@
 package cni
 
-func (cni *EdgeCni) Run() {
+import beehiveContext "github.com/kubeedge/beehive/pkg/core/context"
 
+const (
+	TCP          = "tcp"
+	AgentPodName = "edgemesh-agent"
+)
+
+func (cni *EdgeCni) Run() {
+	// if Tunmodule start
+	if cni.Enable() {
+		cni.MeshAdapter.Run()
+	}
+
+	<-beehiveContext.Done()
+}
+
+func (cni *EdgeCni) CleanupAndExit() error {
+
+	return nil
 }

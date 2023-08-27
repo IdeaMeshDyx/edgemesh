@@ -161,7 +161,7 @@ func ParseIPFrame(buffer buf.ByteBuffer) (*IPFrame, error) {
 	}, nil
 }
 
-func (frame *IPFrame) String() string {
+func (frame *IPFrame) Strings() string {
 	return fmt.Sprintf("IPFrame {\n"+
 		"\tversion=%d\n"+
 		"\theaderLen=%d\n"+
@@ -190,6 +190,22 @@ func (frame *IPFrame) String() string {
 		frame.Source.String(),
 		frame.Target.String(),
 		len(frame.Payload))
+}
+
+func (frame *IPFrame) GetProtocol() string {
+	return fmt.Sprintf("\tprotocol=%d\n", frame.Protocol)
+}
+
+func (frame *IPFrame) GetSourceIP() string {
+	return frame.Source.String()
+}
+
+func (frame *IPFrame) GetTargetIP() string {
+	return frame.Target.String()
+}
+
+func (frame *IPFrame) GetPayloadLen() int {
+	return len(frame.Payload)
 }
 
 func (frame *IPFrame) ToBytes() []byte {
