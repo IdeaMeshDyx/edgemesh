@@ -17,6 +17,7 @@ func (cni *EdgeCni) Run() {
 }
 
 func (cni *EdgeCni) CleanupAndExit() error {
+	cni.MeshAdapter.CloseRoute()
 
 	return nil
 }

@@ -93,6 +93,7 @@ func (tun *tunIf) AddRouteToTun(cidr string) error {
 }
 
 func ExecCommand(command string) error {
+	//TODO： change this cmd to code
 	klog.Infof("exec command '%s'\n", command)
 
 	cmd := exec.Command("/bin/bash", "-c", command)
@@ -115,6 +116,7 @@ func (tun *tunIf) TunReceiveLoop() {
 	// buffer to receive data
 	buffer := buf.NewRecycleByteBuffer(65536)
 	packet := make([]byte, 65536)
+	// TODO: improve the following double for logic
 	for {
 		// read from tun Dev
 		n, err := tun.tunDev.Read(packet)
@@ -190,4 +192,37 @@ func (tun *tunIf) TunWriteLoop() {
 			}
 		}
 	}
+}
+
+// CleanTunDevice delete all the Route and change iin kernel
+func (tun *tunIf) CleanTunDevice() error {
+	err := ExecCommand(fmt.Sprintf("ip link del dev %s mode tun", tun.tunName))
+	if err != nil {
+		klog.Errorf("Delete Tun Device  failed", err)
+		return err
+	}
+	klog.Infof("Set dev %s down\n", tun.tunName)
+	return nil
+}
+
+// CleanTunRoute Delete All Routes attach to Tun
+func (tun *tunIf) CleanTunRoute() error {
+	err := ExecCommand(fmt.Sprintf("ip route flush %s", tun.tunIp))
+	if err != nil {
+		klog.Errorf("Delete Tun Route  failed", err)
+		return err
+	}
+	fmt.Printf("Removed route from dev %s\n", tun.tunName)
+	return nil
+}
+
+// CleanSingleTunRoute Delete Single Route attach to Tun
+func (tun *tunIf) CleanSingleTunRoute(cidr string) error {
+	err := ExecCommand(fmt.Sprintf("ip route del table main %s dev %s", cidr, tun.tunName))
+	if err != nil {
+		klog.Errorf("Delete Tun Route  failed", err)
+		return err
+	}
+	klog.Infof("Removed route for %s from dev %s\n", cidr, tun.tunName)
+	return nil
 }

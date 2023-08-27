@@ -41,7 +41,10 @@ var defaultLoadBalancerConfig = &LoadBalancer{
 }
 
 func newDefaultEdgeCNIConfig(configPath string) *EdgeCniConfig {
-	return nil
+	return &EdgeCniConfig{
+		Enable:  false,
+		EncapIP: defaults.TunDeviceIP,
+	}
 }
 
 func newDefaultEdgeTunnelConfig(configPath string) *EdgeTunnelConfig {
