@@ -29,7 +29,7 @@ type AgentModules struct {
 	// EdgeTunnelConfig indicates EdgeTunnel module config
 	EdgeTunnelConfig *EdgeTunnelConfig `json:"edgeTunnel,omitempty"`
 	//EdgeCniConfig indicates EdgeCNI module config
-	EdgeCniConfig *EdgeCniConfig `json:"edgeTunnel,omitempty"`
+	EdgeCniConfig *EdgeCniConfig `json:"edgeCniConfig,omitempty"`
 }
 
 // EdgeMeshGatewayConfig indicates the config of EdgeMeshGateway which get from EdgeMeshGateway config file
@@ -176,23 +176,23 @@ type EdgeCniConfig struct {
 	// default false
 	Enable bool `json:"enable,omitempty"`
 
-	// MasqIP indicates the encapsulation IP of EdgeCni Tun Dev
+	// EncapsulationIP indicates the encapsulation IP of EdgeCni Tun Dev
 	// do not allow users to configure manually
-	EncapIP string `json:"encapip,omitempty"`
+	EncapsulationIP string `json:"encapsulationIP,omitempty"`
 
 	// TunMode indicates wether adapter usese ebpf and fast mod
-	TunMode int `json:"tunmode,omitempty"`
+	TunMode int `json:"tunMode,omitempty"`
 
 	// MeshCIDR indicates the CIDR of cluster, seperate as ClouCIDR and EdgeCIDR
 	// must set
 	// Allowed values are like:
 	// - cloudcidr:  10.244.36.0/24
 	// - edgecidr:   10.244.13.0/24,10.244.15.0/24
-	MeshCIDR *MeshCIDR `json:"meshCIDR,omitempty"`
+	MeshCIDRConfig *MeshCIDRConfig `json:"meshCIDRConfig,omitempty"`
 }
 
 // MeshCIDR indicates the CIDR of cluster
-type MeshCIDR struct {
+type MeshCIDRConfig struct {
 	// CloudCIDR indicates the CIDR of cloud Pods, Allows multiNetwork
 	CloudCIDR []string `json:"cloudCIDR,omitempty"`
 	// CloudCIDR indicates the CIDR of edge Pods, Allows multiNetwork
