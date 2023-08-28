@@ -2,13 +2,15 @@ package cni
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/kubeedge/beehive/pkg/core"
+	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/klog/v2"
+
 	"github.com/kubeedge/edgemesh/pkg/apis/config/defaults"
 	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
 	"github.com/kubeedge/edgemesh/pkg/clients"
-	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/klog/v2"
-	"time"
 )
 
 // EdgeCni is used for cni traffic control

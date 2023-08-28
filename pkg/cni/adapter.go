@@ -9,14 +9,16 @@ import (
 	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
 	buf "github.com/liuyehcf/common-gtools/buffer"
 	"io"
+	"net"
+	"os"
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
 	"k8s.io/utils/exec"
-	"net"
-	"os"
-	"time"
+
 )
 
 type Adapter interface {
@@ -41,18 +43,19 @@ type MeshAdapter struct {
 	execer           exec.Interface
 	ConfigSyncPeriod time.Duration
 	TunIf            *tunIf
-	EncapIp          net.IP
+	EncapsulationIP  net.IP
 	HostCIDR         string
-	Cloud            []string // PodCIDR in cloud
-	Edge             []string // PodCIDR in edge
+	CloudCIDRs       []string
+	EdgeCIDRs        []string
+
 	PodTunnel        net.Conn
 	Close            chan struct{} // stop signal
 }
 
 func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*MeshAdapter, error) {
-	// get pod network info from cfg and apiserver
+	// get pod network info from cfg and APIServer
 	// TODO： just one time work ,so later need to upgrade this
-	cloud, edge, err := getCIDR(cfg.MeshCIDR)
+	cloud, edge, err := getCIDR(cfg.MeshCIDRConfig)
 	if err != nil {
 		klog.Errorf("get CIDR from config failed: %v", err)
 		return nil, err
@@ -63,12 +66,9 @@ func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*Mesh
 		return nil, err
 	}
 
-	// get Tun listen ip
-	encapIP, err := netutil.GetInterfaceIP(cfg.EncapIP)
-	if err != nil {
-		klog.Errorf("get Tun dev listen ip err: ", err)
-		return nil, err
-	}
+	// get tun listen ip
+	encapIP := net.ParseIP(cfg.EncapsulationIP)
+
 
 	// Create a iptables utils.
 	execer := exec.New()
@@ -87,13 +87,13 @@ func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*Mesh
 	}
 
 	return &MeshAdapter{
-		kubeClient:   cli,
-		IptInterface: iptIf,
-		TunIf:        tun,
-		EncapIp:      encapIP,
-		HostCIDR:     local,
-		Edge:         edge,
-		Cloud:        cloud,
+		kubeClient:      cli,
+		IptInterface:    iptIf,
+		TunIf:           tun,
+		EncapsulationIP: encapIP,
+		HostCIDR:        local,
+		EdgeCIDRs:       edge,
+		CloudCIDRs:      cloud,
 	}, nil
 }
 
@@ -155,6 +155,7 @@ func (mesh *MeshAdapter) HandleReceive() {
 	}
 }
 
+
 func (mesh *MeshAdapter) GetNodeNameByPodIP(podIP string) (string, error) {
 	// use FieldSelector to get Pod Name
 	pods, err := mesh.kubeClient.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{
@@ -204,7 +205,7 @@ func (mesh *MeshAdapter) CloseRoute() {
 
 func (mesh *MeshAdapter) WatchRoute() error {
 	// insert basic route to Tundev
-	allCIDR := append(mesh.Edge, mesh.Cloud...)
+	allCIDR := append(mesh.EdgeCIDRs, mesh.CloudCIDRs...)
 	for _, cidr := range allCIDR {
 		crossNet, err := mesh.CheckTunCIDR(cidr)
 		if err != nil {
@@ -230,18 +231,18 @@ func (mesh *MeshAdapter) EncapsulateData() {}
 func (mesh *MeshAdapter) DecapsulateData() {}
 
 // getCIDR read from config file and get edge/cloud cidr user set
-func getCIDR(cfg *v1alpha1.MeshCIDR) ([]string, []string, error) {
+func getCIDR(cfg *v1alpha1.MeshCIDRConfig) ([]string, []string, error) {
 	cloud := cfg.CloudCIDR
 	edge := cfg.EdgeCIDR
 
 	if err := validateCIDRs(cloud); err != nil {
 		klog.ErrorS(err, "Cloud CIDR is not valid", "cidr", cloud)
-		return cloud, edge, err
+		return nil, nil, err
 	}
 
 	if err := validateCIDRs(edge); err != nil {
 		klog.ErrorS(err, "Edge CIDR is not valid", "cidr", edge)
-		return cloud, edge, err
+		return nil, nil, err
 	}
 
 	klog.Infof("Parsed CIDR of Cloud: %v \n   Edge: %v \n", cloud, edge)
@@ -263,12 +264,14 @@ func findLocalCIDR(cli clientset.Interface) (string, error) {
 	nodeName := os.Getenv("NODE_NAME")
 	if nodeName == "" {
 		klog.Errorf("NODE_NAME environment variable not set")
+		return "", fmt.Errorf("the env NODE_NAME is not set")
 	}
 
 	// use clientset to get local info
 	node, err := cli.CoreV1().Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
 	if err != nil {
 		klog.Errorf("get Node info from Apiserver failed:", err)
+		return "", fmt.Errorf("failed to get Node: %w", err)
 	}
 	podCIDR := node.Spec.PodCIDR
 	return podCIDR, nil
