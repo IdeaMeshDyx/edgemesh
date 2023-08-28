@@ -26,6 +26,7 @@ const (
 	BridgeDeviceIP   = "169.254.96.16"
 
 	TunDeviceName = "edge_tun0"
+	TunDeviceIP   = "169.254.96.17"
 
 	TempKubeConfigPath = "kubeconfig"
 	TempCorefilePath   = "Corefile"
@@ -57,6 +58,7 @@ const (
 	// DiscoveryProtocol and ProxyProtocol maintained by EdgeMesh Author
 	DiscoveryProtocol protocol.ID = "/libp2p/tunnel-discovery/1.0.0"
 	ProxyProtocol     protocol.ID = "/libp2p/tunnel-proxy/1.0.0"
+	CNIProtocol       protocol.ID = "/libp2p/tunnel-cni/1.0.0"
 
 	MdnsDiscovery DiscoveryType = "MDNS"
 	DhtDiscovery  DiscoveryType = "DHT"

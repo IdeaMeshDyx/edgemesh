@@ -3,6 +3,11 @@ package cni
 import (
 	"context"
 	"fmt"
+	"github.com/kubeedge/edgemesh/pkg/apis/config/defaults"
+	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
+	"github.com/kubeedge/edgemesh/pkg/tunnel"
+	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
+	buf "github.com/liuyehcf/common-gtools/buffer"
 	"io"
 	"net"
 	"os"
@@ -14,10 +19,6 @@ import (
 	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
 	"k8s.io/utils/exec"
 
-	"github.com/kubeedge/edgemesh/pkg/apis/config/defaults"
-	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
-	"github.com/kubeedge/edgemesh/pkg/tunnel"
-	utilnet "github.com/kubeedge/edgemesh/pkg/util/net"
 )
 
 type Adapter interface {
@@ -46,7 +47,9 @@ type MeshAdapter struct {
 	HostCIDR         string
 	CloudCIDRs       []string
 	EdgeCIDRs        []string
+
 	PodTunnel        net.Conn
+	Close            chan struct{} // stop signal
 }
 
 func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*MeshAdapter, error) {
@@ -63,8 +66,9 @@ func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*Mesh
 		return nil, err
 	}
 
-	// get proxy listen ip
+	// get tun listen ip
 	encapIP := net.ParseIP(cfg.EncapsulationIP)
+
 
 	// Create a iptables utils.
 	execer := exec.New()
@@ -94,7 +98,10 @@ func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*Mesh
 }
 
 func (mesh *MeshAdapter) Run() {
-	// start Tun Recieve and get data
+	/*	var wg sync.WaitGroup
+		wg.Add(1)*/
+
+	// start Tun Receive and get data
 	go mesh.TunIf.TunReceiveLoop()
 
 	// start Tun Write and send data
@@ -105,51 +112,96 @@ func (mesh *MeshAdapter) Run() {
 
 	// send data from Write pipeline
 	go mesh.HandleSend()
+
 }
 
 func (mesh *MeshAdapter) HandleReceive() {
-	// 创建新的 proxyOpt 对象
-	cniOpts := tunnel.CNIAdapterOptions{
-		Protocol: TCP,
-		NodeName: AgentPodName, // 对段节点的 NodeName
-	}
 	for {
-		packet := <-mesh.TunIf.ReceivePipe
-		_, err := mesh.PodTunnel.Write(packet)
-		if err != nil {
-			klog.Errorf("Error writing data: %v\n", err)
+		select {
+		case <-mesh.Close:
+			klog.Infof("Close HandleReceive Process")
 			return
-		}
-		stream, err := tunnel.Agent.GetCNIAdapterStream(cniOpts)
-		if err != nil {
-			klog.Errorf("l3 adapter get proxy stream from %s error: %w", cniOpts.NodeName, err)
-			return
-		}
-		klog.Infof("l3 adapter start proxy data between nodes %v", cniOpts.NodeName)
+		default:
+			packet := <-mesh.TunIf.ReceivePipe
+			_, err := mesh.PodTunnel.Write(packet)
+			if err != nil {
+				klog.Errorf("Error writing data: %v\n", err)
+				return
+			}
+			//set CNI Options
+			buffer := buf.NewRecycleByteBuffer(65536)
+			buffer.Write(packet[:len(packet)])
+			frame, err := ParseIPFrame(buffer)
+			NodeName, err := mesh.GetNodeNameByPodIP(frame.GetTargetIP())
+			if err != nil {
+				klog.Errorf("get NodeName by PodIP failed")
+			}
+			cniOpts := tunnel.CNIAdapterOptions{
+				Protocol: TCP,
+				NodeName: NodeName,
+			}
 
-		utilnet.ProxyConn(stream, mesh.PodTunnel)
+			stream, err := tunnel.Agent.GetCNIAdapterStream(cniOpts)
+			if err != nil {
+				klog.Errorf("l3 adapter get proxy stream from %s error: %w", cniOpts.NodeName, err)
+				return
+			}
+			klog.Infof("l3 adapter start proxy data between nodes %v", cniOpts.NodeName)
 
-		klog.Infof("Success proxy to %v", mesh.PodTunnel)
+			netutil.ProxyConn(stream, mesh.PodTunnel)
+
+			klog.Infof("Success proxy to %v", mesh.PodTunnel)
+		}
 	}
+}
+
+
+func (mesh *MeshAdapter) GetNodeNameByPodIP(podIP string) (string, error) {
+	// use FieldSelector to get Pod Name
+	pods, err := mesh.kubeClient.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{
+		FieldSelector: "status.podIP=" + podIP,
+	})
+	if err != nil {
+		klog.Errorf("Error getting pods: %v", err)
+		return "", err
+	}
+
+	if len(pods.Items) == 0 {
+		klog.Errorf("No pod found with IP: %s", podIP)
+		return "", err
+	}
+
+	return pods.Items[0].Spec.NodeName, nil
 }
 
 func (mesh *MeshAdapter) HandleSend() {
 	buf := make([]byte, 1024)
 
 	for {
-		n, err := mesh.PodTunnel.Read(buf)
-		if err != nil {
-			if err != io.EOF {
-				klog.Errorf("Error reading data: %v\n", err)
+		select {
+		case <-mesh.Close:
+			klog.Infof("Close HandleSend Process")
+			return
+		default:
+			n, err := mesh.PodTunnel.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					klog.Errorf("Error reading data: %v\n", err)
+				}
+				break
 			}
-			break
+			mesh.TunIf.WritePipe <- buf[:n]
 		}
-		mesh.TunIf.WritePipe <- buf[:n]
 	}
 
 }
 
-func (mesh *MeshAdapter) CloseRoute() {}
+func (mesh *MeshAdapter) CloseRoute() {
+	close(mesh.Close)
+	mesh.TunIf.CleanTunRoute()
+	mesh.TunIf.CleanTunDevice()
+	return
+}
 
 func (mesh *MeshAdapter) WatchRoute() error {
 	// insert basic route to Tundev
@@ -169,7 +221,7 @@ func (mesh *MeshAdapter) WatchRoute() error {
 		}
 	}
 	return nil
-	// TODO： wacth the subNetwork event and if the cidr changes ,apply that change to node
+	// TODO： watch the subNetwork event and if the cidr changes ,apply that change to node
 }
 
 // EncapsulateData add proxyOPt head to Byte frame

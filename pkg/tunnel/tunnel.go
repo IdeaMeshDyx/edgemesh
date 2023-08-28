@@ -421,13 +421,57 @@ type CNIAdapterOptions struct {
 // GetCNIAdapterStream establishes a new stream with a destination peer, either directly or through a relay node,
 // use net.conn to get income data
 func (t *EdgeTunnel) GetCNIAdapterStream(opts CNIAdapterOptions) (*StreamConn, error) {
+	var destInfo peer.AddrInfo
+	var err error
 
-	return nil, nil
+	destName := opts.NodeName
+	destID, exists := t.nodePeerMap[destName]
+	if !exists {
+		destID, err = PeerIDFromString(destName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate peer id for %s err: %w", destName, err)
+		}
+		destInfo = peer.AddrInfo{ID: destID, Addrs: []ma.Multiaddr{}}
+		// mapping nodeName and peerID
+		klog.Infof("Could not find peer %s in cache, auto generate peer info: %s", destName, destInfo)
+		t.nodePeerMap[destName] = destID
+	} else {
+		destInfo = t.p2pHost.Peerstore().PeerInfo(destID)
+	}
+	if err = AddCircuitAddrsToPeer(&destInfo, t.relayMap); err != nil {
+		return nil, fmt.Errorf("failed to add circuit addrs to peer %s", destInfo)
+	}
+	t.p2pHost.Peerstore().AddAddrs(destInfo.ID, destInfo.Addrs, peerstore.PermanentAddrTTL)
+
+	stream, err := t.p2pHost.NewStream(network.WithUseTransient(t.hostCtx, "relay"), destID, defaults.ProxyProtocol)
+	if err != nil {
+		return nil, fmt.Errorf("new stream between %s: %s err: %w", destName, destInfo, err)
+	}
+	klog.Infof("New stream between peer %s: %s success", destName, destInfo)
+	// defer stream.Close() // will close the stream elsewhere
+
+	// TODO: Dial session, how to make sure that the connection is all right
+	/*	conn, err := net.DialTimeout("ip4:icmp", ipAddr, timeout)
+		if err != nil {
+			fmt.Printf("Error connecting to IP address %s: %v\n", ipAddr, err)
+			return
+		}
+		defer conn.Close()*/
+	return NewStreamConn(stream), nil
 }
 
-func (t *EdgeTunnel) CNIAdapterStreamHandler(opts CNIAdapterOptions) (*StreamConn, error) {
+func (t *EdgeTunnel) CNIAdapterStreamHandler(stream network.Stream) {
+	remotePeer := peer.AddrInfo{
+		ID:    stream.Conn().RemotePeer(),
+		Addrs: []ma.Multiaddr{stream.Conn().RemoteMultiaddr()},
+	}
+	klog.Infof("Adapter service got a new stream from %s", remotePeer)
 
-	return nil, nil
+	// TODO: setup connection ,eg. UDP transport
+	/*	streamWriter := protoio.NewDelimitedWriter(stream)
+		streamReader := protoio.NewDelimitedReader(stream, MaxReadSize) // TODO get maxSize from default
+
+		streamConn := NewStreamConn(stream)*/
 }
 
 // BootstrapConnect tries to connect to a list of bootstrap peers in a relay map.
