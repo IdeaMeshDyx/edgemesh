@@ -122,7 +122,7 @@ func (tun *tunIf) TunReceiveLoop() {
 		n, err := tun.tunDev.Read(packet)
 		if err != nil {
 			klog.Error("failed to read data from tun", err)
-			break
+			continue
 		}
 
 		// get data from tun
@@ -130,7 +130,6 @@ func (tun *tunIf) TunReceiveLoop() {
 		for {
 			// Get IP frame to byte data to encapsulate
 			frame, err := ParseIPFrame(buffer)
-
 			if err != nil {
 				klog.Errorf("Parse frame failed:", err)
 				buffer.Clean()
@@ -146,7 +145,6 @@ func (tun *tunIf) TunReceiveLoop() {
 			klog.Infof("receive from tun, send through tunnel , source %s target %s len %d", frame.GetSourceIP(), frame.GetTargetIP(), frame.GetPayloadLen())
 		}
 	}
-	return
 }
 
 // TunWriteLoop  send data back to the pod
@@ -160,6 +158,7 @@ func (tun *tunIf) TunWriteLoop() {
 		packet = <-tun.WritePipe
 		if n := len(packet); n == 0 {
 			klog.Error("failed to read from tcp tunnel")
+			continue
 		}
 		buffer.Write(packet[:len(packet)])
 
@@ -168,10 +167,6 @@ func (tun *tunIf) TunWriteLoop() {
 			frame, err := ParseIPFrame(buffer)
 			if err != nil {
 				klog.Errorf("failed to parse ip package from tcp tunnel", err)
-			}
-
-			if err != nil {
-				klog.Errorf("Parse frame failed:", err)
 				buffer.Clean()
 				break
 			}
@@ -196,33 +191,36 @@ func (tun *tunIf) TunWriteLoop() {
 
 // CleanTunDevice delete all the Route and change iin kernel
 func (tun *tunIf) CleanTunDevice() error {
-	err := ExecCommand(fmt.Sprintf("ip link del dev %s mode tun", tun.tunName))
+	cmdStr := fmt.Sprintf("ip link del dev %s mode tun", tun.tunName)
+	err := ExecCommand(cmdStr)
 	if err != nil {
-		klog.Errorf("Delete Tun Device  failed", err)
+		klog.Errorf("failed to exec command '%s', error: %v", cmdStr, err)
 		return err
 	}
-	klog.Infof("Set dev %s down\n", tun.tunName)
+	klog.Infof("Set dev %s down successfully", tun.tunName)
 	return nil
 }
 
 // CleanTunRoute Delete All Routes attach to Tun
 func (tun *tunIf) CleanTunRoute() error {
-	err := ExecCommand(fmt.Sprintf("ip route flush %s", tun.tunIp))
+	cmdStr := fmt.Sprintf("ip route flush %s", tun.tunIp)
+	err := ExecCommand(cmdStr)
 	if err != nil {
-		klog.Errorf("Delete Tun Route  failed", err)
+		klog.Errorf("failed to exec command '%s', error: %v", cmdStr, err)
 		return err
 	}
-	fmt.Printf("Removed route from dev %s\n", tun.tunName)
+	fmt.Printf("Removed route from dev %s successfully", tun.tunName)
 	return nil
 }
 
 // CleanSingleTunRoute Delete Single Route attach to Tun
 func (tun *tunIf) CleanSingleTunRoute(cidr string) error {
-	err := ExecCommand(fmt.Sprintf("ip route del table main %s dev %s", cidr, tun.tunName))
+	cmdStr := fmt.Sprintf("ip route del table main %s dev %s", cidr, tun.tunName)
+	err := ExecCommand(cmdStr)
 	if err != nil {
-		klog.Errorf("Delete Tun Route  failed", err)
+		klog.Errorf("failed to exec command '%s', error: %v", cmdStr, err)
 		return err
 	}
-	klog.Infof("Removed route for %s from dev %s\n", cidr, tun.tunName)
+	klog.Infof("Removed route for %s from dev %s successfully", cidr, tun.tunName)
 	return nil
 }

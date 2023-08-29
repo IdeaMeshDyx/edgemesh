@@ -3,22 +3,22 @@ package cni
 import (
 	"context"
 	"fmt"
-	"github.com/kubeedge/edgemesh/pkg/apis/config/defaults"
-	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
-	"github.com/kubeedge/edgemesh/pkg/tunnel"
-	netutil "github.com/kubeedge/edgemesh/pkg/util/net"
-	buf "github.com/liuyehcf/common-gtools/buffer"
 	"io"
 	"net"
 	"os"
 	"time"
 
+	"github.com/liuyehcf/common-gtools/buffer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
 	"k8s.io/utils/exec"
 
+	"github.com/kubeedge/edgemesh/pkg/apis/config/defaults"
+	"github.com/kubeedge/edgemesh/pkg/apis/config/v1alpha1"
+	"github.com/kubeedge/edgemesh/pkg/tunnel"
+	utilnet "github.com/kubeedge/edgemesh/pkg/util/net"
 )
 
 type Adapter interface {
@@ -48,8 +48,8 @@ type MeshAdapter struct {
 	CloudCIDRs       []string
 	EdgeCIDRs        []string
 
-	PodTunnel        net.Conn
-	Close            chan struct{} // stop signal
+	PodTunnel net.Conn
+	Close     chan struct{} // stop signal
 }
 
 func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*MeshAdapter, error) {
@@ -68,7 +68,6 @@ func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*Mesh
 
 	// get tun listen ip
 	encapIP := net.ParseIP(cfg.EncapsulationIP)
-
 
 	// Create a iptables utils.
 	execer := exec.New()
@@ -98,9 +97,6 @@ func NewMeshAdapter(cfg *v1alpha1.EdgeCniConfig, cli clientset.Interface) (*Mesh
 }
 
 func (mesh *MeshAdapter) Run() {
-	/*	var wg sync.WaitGroup
-		wg.Add(1)*/
-
 	// start Tun Receive and get data
 	go mesh.TunIf.TunReceiveLoop()
 
@@ -112,7 +108,6 @@ func (mesh *MeshAdapter) Run() {
 
 	// send data from Write pipeline
 	go mesh.HandleSend()
-
 }
 
 func (mesh *MeshAdapter) HandleReceive() {
@@ -125,16 +120,17 @@ func (mesh *MeshAdapter) HandleReceive() {
 			packet := <-mesh.TunIf.ReceivePipe
 			_, err := mesh.PodTunnel.Write(packet)
 			if err != nil {
-				klog.Errorf("Error writing data: %v\n", err)
-				return
+				klog.Errorf("Error writing data: %v", err)
+				continue
 			}
 			//set CNI Options
-			buffer := buf.NewRecycleByteBuffer(65536)
-			buffer.Write(packet[:len(packet)])
-			frame, err := ParseIPFrame(buffer)
+			buf := buffer.NewRecycleByteBuffer(65536)
+			buf.Write(packet[:len(packet)])
+			frame, err := ParseIPFrame(buf)
 			NodeName, err := mesh.GetNodeNameByPodIP(frame.GetTargetIP())
 			if err != nil {
 				klog.Errorf("get NodeName by PodIP failed")
+				continue
 			}
 			cniOpts := tunnel.CNIAdapterOptions{
 				Protocol: TCP,
@@ -144,17 +140,15 @@ func (mesh *MeshAdapter) HandleReceive() {
 			stream, err := tunnel.Agent.GetCNIAdapterStream(cniOpts)
 			if err != nil {
 				klog.Errorf("l3 adapter get proxy stream from %s error: %w", cniOpts.NodeName, err)
-				return
+				continue
 			}
 			klog.Infof("l3 adapter start proxy data between nodes %v", cniOpts.NodeName)
 
-			netutil.ProxyConn(stream, mesh.PodTunnel)
-
+			utilnet.ProxyConn(stream, mesh.PodTunnel)
 			klog.Infof("Success proxy to %v", mesh.PodTunnel)
 		}
 	}
 }
-
 
 func (mesh *MeshAdapter) GetNodeNameByPodIP(podIP string) (string, error) {
 	// use FieldSelector to get Pod Name
@@ -186,9 +180,9 @@ func (mesh *MeshAdapter) HandleSend() {
 			n, err := mesh.PodTunnel.Read(buf)
 			if err != nil {
 				if err != io.EOF {
-					klog.Errorf("Error reading data: %v\n", err)
+					klog.Errorf("Error reading data: %v", err)
 				}
-				break
+				continue
 			}
 			mesh.TunIf.WritePipe <- buf[:n]
 		}
@@ -198,8 +192,8 @@ func (mesh *MeshAdapter) HandleSend() {
 
 func (mesh *MeshAdapter) CloseRoute() {
 	close(mesh.Close)
-	mesh.TunIf.CleanTunRoute()
-	mesh.TunIf.CleanTunDevice()
+	_ = mesh.TunIf.CleanTunRoute()
+	_ = mesh.TunIf.CleanTunDevice()
 	return
 }
 
@@ -245,7 +239,7 @@ func getCIDR(cfg *v1alpha1.MeshCIDRConfig) ([]string, []string, error) {
 		return nil, nil, err
 	}
 
-	klog.Infof("Parsed CIDR of Cloud: %v \n   Edge: %v \n", cloud, edge)
+	klog.Infof("Parsed CIDR of Cloud: %v    Edge: %v ", cloud, edge)
 	return cloud, edge, nil
 }
 
