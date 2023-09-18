@@ -61,6 +61,9 @@ func LoadNetConf(argsStdin []byte) (*NetConf, error) {
 			"type": n.IPAM.Type,
 		}
 	}
+	if !hasItem(n.Delegate, "cniVersion") {
+		n.Delegate["cniVersion"] = n.CNIVersion
+	}
 
 	return n, nil
 }
